@@ -1,11 +1,10 @@
-from crypt import methods
-from datetime import timedelta
+from datetime import timedelta, date
 from flask import Flask, request, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 from marshmallow.validate import Length
 from flask_bcrypt import Bcrypt
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 
 app = Flask(__name__)
 
@@ -45,6 +44,9 @@ class CardSchema(ma.Schema):
     class Meta:
         fields = ('id', 'title', 'description', 'date', 'status', 'priority')
 
+card_schema = CardSchema()
+cards_schema = CardSchema(many=True)
+
 class UserSchema(ma.Schema):
     class Meta:
         fields = ('id', 'email', 'password', 'admin')
@@ -69,7 +71,6 @@ def drop_db():
 
 @app.cli.command('seed')
 def seed_db():
-    from datetime import date
 
     # Create a new Card (in memory)
     card = Card(
@@ -110,9 +111,9 @@ def index():
     return 'Hello World!'
 
 
-@app.route('/cards', methods=["GET"])
+@app.route('/cards/', methods=["GET"])
 # This only allows access to requests with a valid token
-@jwt_required()
+#@jwt_required()
 def cards():
     # get all the cards from the database table
     cards_list = Card.query.all()
@@ -120,6 +121,71 @@ def cards():
     result = CardSchema(many=True).dump(cards_list)
     # return the data in JSON format
     return result
+
+@app.route('/cards/<int:id>', methods=["GET"])
+def get_card(id):
+    #Find the card in the database by id SELECT * FROM CARDS WHERE ID = id(argument)
+    card = Card.query.get(id)
+    if not card:
+        #return abort(400, description=  "Card doesn't exist") 
+        return {"error": "Card not found"}
+
+    # Return the requested card
+    return jsonify(card_schema.dump(card))
+    
+
+@app.route('/cards', methods=["POST"])
+# This only allows access to requests with a valid token
+@jwt_required()
+def new_card():
+    #load data we get from the request
+    card_fields = CardSchema().load(request.json)
+    #create a card object
+    card = Card(
+        title= card_fields["title"],
+        description=card_fields["description"],
+        status=card_fields["status"],
+        priority=card_fields["priority"],
+        date=date.today()
+    )
+    # add the card object to the database and store it
+    db.session.add(card)
+    db.session.commit()
+
+    return jsonify(card_schema.dump(card))
+    #return jsonify(CardSchema().dump(card))
+
+@app.route('/cards/<int:id>', methods=["DELETE"])
+@jwt_required()
+def delete_card(id):
+
+    #Get the user's identity
+    user_id = get_jwt_identity()  
+    #get the user by id from the database
+    user = User.query.get(user_id)
+
+    if not user.admin:
+        return abort(400, description=  "You don't have the permission to do this")
+
+    #Find the card in the database by id SELECT * FROM CARDS WHERE ID = id(argument)
+    card = Card.query.get(id)
+
+    if not card:
+        return abort(400, description=  "Card doesn't exist")
+    #Delete the card from the database
+    db.session.delete(card)
+    db.session.commit()
+
+    # Return the deleted card
+    return jsonify(card_schema.dump(card))
+    
+# UPDATE CARD
+# route with an id and PUT
+# jwt is required
+# the body of the request needs to include the data to be updated
+# only admins can update
+# card needs to exist
+# update the card in the database
 
 @app.route('/auth/register', methods=["POST"])
 def auth_register():
@@ -139,6 +205,8 @@ def auth_register():
     db.session.commit()
     access_token = create_access_token(identity=str(user.id), expires_delta=timedelta(days=1))   
     return jsonify({"user": user.email, "token": access_token})
+
+
 
 @app.route("/auth/login", methods=["POST"])
 def auth_login():
